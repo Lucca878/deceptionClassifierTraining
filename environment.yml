@@ -1,0 +1,22 @@
+name: deception
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - jupyter
+  - ipykernel
+  - tensorboard
+  - pip:
+      - torch
+      - transformers
+      - datasets
+      - evaluate
+      - accelerate
+      - sentencepiece
+      - safetensors
