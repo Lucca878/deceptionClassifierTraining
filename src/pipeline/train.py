@@ -176,7 +176,6 @@ def run_cv_training(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.Data
             args=training_args,
             train_dataset=tok_data_train,
             eval_dataset=tok_data_test,
-            tokenizer=tokenizer,
             data_collator=data_collator,
             compute_metrics=compute_metrics,
         )
@@ -231,7 +230,6 @@ def train_full_and_save(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> str
         args=training_args,
         train_dataset=tok_full_ds,
         eval_dataset=tok_full_ds,
-        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
