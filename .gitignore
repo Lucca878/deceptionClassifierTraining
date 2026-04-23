@@ -24,6 +24,7 @@ venv/
 runs/
 checkpoints/
 models/
+results/
 
 # Logs
 logs/
