@@ -5,11 +5,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Dict, Tuple
 
-import evaluate
 import numpy as np
 import pandas as pd
 import torch
 from datasets import Dataset
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import GroupKFold, KFold
 from transformers import (
     AutoModelForSequenceClassification,
@@ -147,12 +147,10 @@ def build_training_args(output_dir: str, cfg: TrainConfig) -> TrainingArguments:
 
 
 def run_cv_training(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.DataFrame:
-    accuracy_metric = evaluate.load("accuracy")
-
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=1)
-        return accuracy_metric.compute(predictions=predictions, references=labels)
+        return {"accuracy": float(accuracy_score(labels, predictions))}
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     preprocess_function = build_preprocess_fn(tokenizer, cfg)
@@ -212,12 +210,10 @@ def run_cv_training(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.Data
 
 
 def train_full_and_save(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> str:
-    accuracy_metric = evaluate.load("accuracy")
-
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=1)
-        return accuracy_metric.compute(predictions=predictions, references=labels)
+        return {"accuracy": float(accuracy_score(labels, predictions))}
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     preprocess_function = build_preprocess_fn(tokenizer, cfg)
@@ -242,7 +238,7 @@ def train_full_and_save(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> str
 
     trainer.train()
 
-    final_dir = os.path.join(run_dir, "final_model")
+    final_dir = os.path.join(run_dir, "model")
     os.makedirs(final_dir, exist_ok=True)
     model.save_pretrained(final_dir)
     tokenizer.save_pretrained(final_dir)
