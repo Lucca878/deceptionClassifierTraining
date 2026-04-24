@@ -60,11 +60,17 @@ python src/pipeline/run_pipeline.py --mode all --model modernbert
 ## Modes
 
 ```bash
-# Train only
+# Train only (CV + full-data training)
 python src/pipeline/run_pipeline.py --mode train --model distilbert
 
+# CV only (tuning stage)
+python src/pipeline/run_pipeline.py --mode cv --model distilbert
+
+# Full-data training only (after choosing settings from CV)
+python src/pipeline/run_pipeline.py --mode full --model distilbert
+
 # Evaluate only (existing trained model)
-python src/pipeline/run_pipeline.py --mode eval --model_dir models/<your_model_dir>/final_model
+python src/pipeline/run_pipeline.py --mode eval --model_dir models/<your_model_dir>/model
 ```
 
 ## Colab GPU Training
@@ -75,13 +81,17 @@ Typical Colab flow:
 1. Upload or clone this repo in Colab.
 2. Runtime -> Change runtime type -> GPU.
 3. Install environment dependencies (pip in Colab).
-4. Run training command, for example:
+4. Run CV first, then full training.
 
 ```bash
-python src/pipeline/run_pipeline.py --mode train --model distilbert
+# CV (inspect cv_results.csv)
+python src/pipeline/run_pipeline.py --mode cv --model distilbert
+
+# Full training after you are satisfied with CV
+python src/pipeline/run_pipeline.py --mode full --model distilbert
 ```
 
-The trained model is saved under `models/<model>_<timestamp>/final_model/`.
+The trained model is saved under `models/<model>_<timestamp>/model/`.
 
 ## Training Settings (DistilBERT Notebook Equivalent)
 
@@ -107,12 +117,14 @@ Important label semantics:
 
 Training artifacts:
 - `models/<model>_<timestamp>/cv_results.csv`
-- `models/<model>_<timestamp>/run_metadata.json`
-- `models/<model>_<timestamp>/final_model/`
+- `models/<model>_<timestamp>/config.json`
+- `models/<model>_<timestamp>/model/`
 
 Evaluation artifacts:
 - `results/summary_all_datasets.csv`
 - `results/labeled_<dataset>_<model>.csv`
+
+`summary_all_datasets.csv` is append-only: each new evaluation run appends rows instead of overwriting prior results.
 
 Each labeled dataset CSV contains the original dataset columns plus:
 - `<model>_label_numeric`: numeric prediction (`deceptive=0`, `truthful=1`)

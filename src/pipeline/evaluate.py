@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List
 
 import numpy as np
@@ -128,6 +129,7 @@ def evaluate_model_on_datasets(model_dir: str, output_dir: str = "results") -> s
 
     summary_rows = []
     model_tag = os.path.basename(os.path.normpath(model_dir)) or "model"
+    evaluated_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
     for ds in DATASETS:
         if not os.path.exists(ds.path):
@@ -168,6 +170,7 @@ def evaluate_model_on_datasets(model_dir: str, output_dir: str = "results") -> s
 
         summary_rows.append(
             {
+                "evaluated_at": evaluated_at,
                 "model": model_tag,
                 "dataset": ds.name,
                 "n": len(data),
@@ -199,5 +202,9 @@ def evaluate_model_on_datasets(model_dir: str, output_dir: str = "results") -> s
 
     summary_df = pd.DataFrame(summary_rows)
     out_path = os.path.join(output_dir, "summary_all_datasets.csv")
+    if os.path.exists(out_path):
+        existing = pd.read_csv(out_path)
+        summary_df = pd.concat([existing, summary_df], ignore_index=True)
+
     summary_df.to_csv(out_path, index=False)
     return out_path
