@@ -1,3 +1,4 @@
+import glob
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -119,8 +120,98 @@ def _raw_probs_to_project_conf(raw_probs: list[float], project_label: int) -> fl
     return float(raw_probs[raw_idx])
 
 
-def evaluate_model_on_datasets(model_dir: str, output_dir: str = "results") -> str:
+def _shared_labeled_path(output_dir: str, dataset_name: str) -> str:
+    return os.path.join(output_dir, f"labeled_{dataset_name}.csv")
+
+
+def _per_model_labeled_path(output_dir: str, dataset_name: str, model_tag: str) -> str:
+    return os.path.join(output_dir, f"labeled_{dataset_name}_{model_tag}.csv")
+
+
+def _can_reuse_labeled_df(candidate_df: pd.DataFrame, source_df: pd.DataFrame) -> bool:
+    return len(candidate_df) == len(source_df) and all(col in candidate_df.columns for col in source_df.columns)
+
+
+def _load_or_init_labeled_df(source_df: pd.DataFrame, output_dir: str, dataset_name: str) -> pd.DataFrame:
+    shared_path = _shared_labeled_path(output_dir, dataset_name)
+    if os.path.exists(shared_path):
+        labeled_df = pd.read_csv(shared_path)
+        if not _can_reuse_labeled_df(labeled_df, source_df):
+            raise ValueError(
+                f"Existing labeled file has incompatible shape or columns: {shared_path}"
+            )
+        return labeled_df
+
+    labeled_df = source_df.copy()
+    legacy_pattern = os.path.join(output_dir, f"labeled_{dataset_name}_*.csv")
+    for legacy_path in sorted(glob.glob(legacy_pattern)):
+        legacy_df = pd.read_csv(legacy_path)
+        if not _can_reuse_labeled_df(legacy_df, source_df):
+            continue
+
+        for column in legacy_df.columns:
+            if column not in labeled_df.columns:
+                labeled_df[column] = legacy_df[column]
+
+    return labeled_df
+
+
+def _ensure_prediction_columns(labeled_df: pd.DataFrame, model_tag: str) -> tuple[str, str, str]:
+    numeric_col = f"{model_tag}_label_numeric"
+    label_col = f"{model_tag}_label"
+    probability_col = f"{model_tag}_probability"
+
+    if numeric_col not in labeled_df.columns:
+        labeled_df[numeric_col] = pd.Series(
+            pd.array([pd.NA] * len(labeled_df), dtype="Int64"),
+            index=labeled_df.index,
+        )
+    else:
+        labeled_df[numeric_col] = pd.array(labeled_df[numeric_col], dtype="Int64")
+
+    if label_col not in labeled_df.columns:
+        labeled_df[label_col] = ""
+    else:
+        labeled_df[label_col] = labeled_df[label_col].fillna("").astype(str)
+
+    if probability_col not in labeled_df.columns:
+        labeled_df[probability_col] = pd.Series(
+            pd.array([pd.NA] * len(labeled_df), dtype="Float64"),
+            index=labeled_df.index,
+        )
+    else:
+        labeled_df[probability_col] = pd.array(labeled_df[probability_col], dtype="Float64")
+
+    return numeric_col, label_col, probability_col
+
+
+def _write_predictions(
+    labeled_df: pd.DataFrame,
+    valid_idx: list[int],
+    pred_label_num: list[int],
+    pred_label_str: list[str],
+    pred_conf: list[float],
+    model_tag: str,
+) -> pd.DataFrame:
+    numeric_col, label_col, probability_col = _ensure_prediction_columns(labeled_df, model_tag)
+
+    for idx, num, label, conf in zip(valid_idx, pred_label_num, pred_label_str, pred_conf):
+        labeled_df.at[idx, numeric_col] = int(num)
+        labeled_df.at[idx, label_col] = label
+        labeled_df.at[idx, probability_col] = round(conf, 6)
+
+    return labeled_df
+
+
+def evaluate_model_on_datasets(
+    model_dir: str,
+    output_dir: str = "results",
+    labeled_output: str = "combined",
+) -> str:
     os.makedirs(output_dir, exist_ok=True)
+
+    if labeled_output not in {"combined", "per-model", "both"}:
+        raise ValueError("labeled_output must be one of: combined, per-model, both")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
@@ -185,20 +276,32 @@ def evaluate_model_on_datasets(model_dir: str, output_dir: str = "results") -> s
             }
         )
 
-        labeled_df = df.copy()
-        labeled_df[f"{model_tag}_label_numeric"] = np.nan
-        labeled_df[f"{model_tag}_label"] = ""
-        labeled_df[f"{model_tag}_probability"] = np.nan
-
-        # Write predictions only for rows where label parsing succeeded and model was run.
         valid_idx = data.index.tolist()
-        for idx, num, label, conf in zip(valid_idx, pred_label_num, pred_label_str, pred_conf):
-            labeled_df.at[idx, f"{model_tag}_label_numeric"] = int(num)
-            labeled_df.at[idx, f"{model_tag}_label"] = label
-            labeled_df.at[idx, f"{model_tag}_probability"] = round(conf, 6)
 
-        labeled_out = os.path.join(output_dir, f"labeled_{ds.name}_{model_tag}.csv")
-        labeled_df.to_csv(labeled_out, index=False)
+        if labeled_output in {"combined", "both"}:
+            labeled_df = _load_or_init_labeled_df(df, output_dir, ds.name)
+            labeled_df = _write_predictions(
+                labeled_df,
+                valid_idx,
+                pred_label_num,
+                pred_label_str,
+                pred_conf,
+                model_tag,
+            )
+            labeled_out = _shared_labeled_path(output_dir, ds.name)
+            labeled_df.to_csv(labeled_out, index=False)
+
+        if labeled_output in {"per-model", "both"}:
+            per_model_df = _write_predictions(
+                df.copy(),
+                valid_idx,
+                pred_label_num,
+                pred_label_str,
+                pred_conf,
+                model_tag,
+            )
+            labeled_out = _per_model_labeled_path(output_dir, ds.name, model_tag)
+            per_model_df.to_csv(labeled_out, index=False)
 
     summary_df = pd.DataFrame(summary_rows)
     out_path = os.path.join(output_dir, "summary_all_datasets.csv")

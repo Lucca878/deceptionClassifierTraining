@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output_root", type=str, default="models")
     parser.add_argument("--results_dir", type=str, default="results")
+    parser.add_argument(
+        "--labeled_output",
+        choices=["combined", "per-model", "both"],
+        default="combined",
+        help="How evaluation writes labeled CSVs: combined per dataset, per-model files, or both",
+    )
     parser.add_argument("--seed", type=int, default=42)
     # Hyperparameters
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
@@ -86,6 +92,7 @@ def main() -> None:
         summary_path = evaluate_model_on_datasets(
             model_dir=eval_model_dir,
             output_dir=args.results_dir,
+            labeled_output=args.labeled_output,
         )
         print(f"Evaluation summary saved at: {summary_path}")
 

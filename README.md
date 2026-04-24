@@ -7,6 +7,8 @@ The workflow is script-first and reproducible:
 2. Save the final model locally.
 3. Evaluate the saved model across all datasets in `data/`.
 
+By default, evaluation writes one combined labeled CSV per dataset and appends the current model's columns into that file.
+
 ## Fresh Clone Flow
 
 If you are new to this repo:
@@ -14,7 +16,7 @@ If you are new to this repo:
 2. Create and activate the environment.
 3. Train one model (`distilbert`, `bert`, `sbert`, or `modernbert`).
 4. Evaluate that trained model on all datasets.
-5. Use the generated per-dataset labeled CSV outputs and summary CSV.
+5. Use the generated combined per-dataset labeled CSV outputs and summary CSV.
 
 ## Setup
 
@@ -75,6 +77,16 @@ python src/pipeline/run_pipeline.py --mode full --model distilbert
  
  # For pre-trained models (e.g., distilBERT_finetuned):
  python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned
+
+ # Control labeled CSV output style:
+ # combined (default): one labeled_<dataset>.csv with appended columns for each evaluated model
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output combined
+
+ # per-model: one labeled_<dataset>_<model>.csv per evaluation run
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output per-model
+
+ # both: write both combined and per-model labeled CSV outputs
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output both
 ```
 
 ## Colab GPU Training
@@ -153,14 +165,21 @@ Training artifacts:
 
 Evaluation artifacts:
 - `results/summary_all_datasets.csv`
-- `results/labeled_<dataset>_<model>.csv`
+- `results/labeled_<dataset>.csv` (default, combined output)
+- `results/labeled_<dataset>_<model>.csv` (optional, when `--labeled_output per-model` or `--labeled_output both` is used)
 
 `summary_all_datasets.csv` is append-only: each new evaluation run appends rows instead of overwriting prior results.
 
-Each labeled dataset CSV contains the original dataset columns plus:
+Combined labeled dataset CSVs contain the original dataset columns plus one set of prediction columns per evaluated model:
 - `<model>_label_numeric`: numeric prediction (`deceptive=0`, `truthful=1`)
 - `<model>_label`: string prediction (`deceptive` or `truthful`)
 - `<model>_probability`: class probability of the predicted label
+
+`--labeled_output combined` is the default and appends new model columns into the existing `labeled_<dataset>.csv` files.
+
+`--labeled_output per-model` writes standalone labeled files for the current evaluated model only.
+
+`--labeled_output both` writes both formats in the same evaluation run.
 
 ## Reproducibility Note
 
