@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_root", type=str, default="models")
     parser.add_argument("--results_dir", type=str, default="results")
     parser.add_argument("--seed", type=int, default=42)
+    # Hyperparameters
+    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
+    parser.add_argument("--weight_decay", type=float, default=None, help="Weight decay")
     return parser.parse_args()
 
 
@@ -55,6 +60,10 @@ def main() -> None:
             model_name=args.model_name,
             output_root=args.output_root,
             seed=args.seed,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            weight_decay=args.weight_decay,
         )
         print(f"Training model preset: {cfg.model_key}")
         print(f"Backbone: {cfg.model_name}")

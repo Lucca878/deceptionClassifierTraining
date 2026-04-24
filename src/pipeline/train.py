@@ -59,17 +59,33 @@ def make_config(
     model_name: str | None = None,
     output_root: str = "models",
     seed: int = 42,
+    epochs: int | None = None,
+    lr: float | None = None,
+    batch_size: int | None = None,
+    weight_decay: float | None = None,
 ) -> TrainConfig:
     if model_key not in MODEL_PRESETS:
         raise ValueError(f"Unsupported model '{model_key}'. Choices: {sorted(MODEL_PRESETS)}")
 
     chosen_model_name = model_name if model_name else MODEL_PRESETS[model_key]
-    return TrainConfig(
+    cfg = TrainConfig(
         model_key=model_key,
         model_name=chosen_model_name,
         output_dir=output_root,
         seed=seed,
     )
+    
+    # Override hyperparameters if provided
+    if epochs is not None:
+        cfg.epochs = epochs
+    if lr is not None:
+        cfg.lr = lr
+    if batch_size is not None:
+        cfg.batch_size = batch_size
+    if weight_decay is not None:
+        cfg.weight_decay = weight_decay
+    
+    return cfg
 
 
 # ---------------------------------------------------------------------------
