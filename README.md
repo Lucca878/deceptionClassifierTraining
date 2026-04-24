@@ -69,8 +69,12 @@ python src/pipeline/run_pipeline.py --mode cv --model distilbert
 # Full-data training only (after choosing settings from CV)
 python src/pipeline/run_pipeline.py --mode full --model distilbert
 
-# Evaluate only (existing trained model)
-python src/pipeline/run_pipeline.py --mode eval --model_dir models/<your_model_dir>/model
+ # Evaluate only (existing trained model)
+ # For models trained by this pipeline:
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/<model>_<timestamp>/model
+ 
+ # For pre-trained models (e.g., distilBERT_finetuned):
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned
 ```
 
 ## Colab GPU Training
@@ -107,6 +111,28 @@ The training path is aligned with the DistilBERT notebook logic:
 - weight decay: `0.01`
 - eval/save strategy: per epoch
 - fp16: disabled (as in notebook)
+
+## Recommended Settings by Architecture
+
+Use this section as the current reference for model-specific defaults from CV runs.
+Update values as new tuning results become available.
+
+- `distilbert` (confirmed baseline):
+	- epochs: `2`
+	- learning rate: `5e-5`
+	- batch size: `32`
+	- weight decay: `0.01`
+- `bert`:
+	- status: `confirmed`
+	- epochs: `2`
+	- learning rate: `2.5e-5`
+	- batch size: `32`
+	- weight decay: `0.01`
+	- latest CV reference: accuracy `0.7609`, recall truthful `0.7468`, recall deceptive `0.7739`, overfit folds `0/5`
+- `sbert`:
+	- status: `TBD`
+- `modernbert`:
+	- status: `TBD`
 
 Important label semantics:
 - Training follows notebook semantics internally: `truthful -> 0`, `deceptive -> 1`.

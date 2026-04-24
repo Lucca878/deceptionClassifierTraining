@@ -1,8 +1,11 @@
 {
+  "python.defaultInterpreterPath": "/Users/luccapfruender/miniconda3/envs/deception/bin/python",
   "python.terminal.activateEnvironment": true,
   "jupyter.askForKernelRestart": false,
   "files.exclude": {
     "**/__pycache__": true,
     "**/.ipynb_checkpoints": true
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda"
 }
