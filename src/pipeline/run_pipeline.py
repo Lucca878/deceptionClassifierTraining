@@ -2,19 +2,23 @@ import argparse
 
 try:
     from src.pipeline.evaluate import evaluate_model_on_datasets
-    from src.pipeline.train import make_config, run_training
+    from src.pipeline.train import make_config, run_cv_only, run_full_only, run_training
 except ModuleNotFoundError:
     from evaluate import evaluate_model_on_datasets
-    from train import make_config, run_training
+    from train import make_config, run_cv_only, run_full_only, run_training
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="End-to-end deception pipeline")
     parser.add_argument(
         "--mode",
-        choices=["all", "train", "eval"],
+        choices=["all", "train", "eval", "cv", "full"],
         default="all",
-        help="all: train + eval, train: only train, eval: only evaluate existing model",
+        help=(
+            "all: train (cv+full) + eval, train: cv+full only, "
+            "cv: only cross-validation, full: only full-data training, "
+            "eval: only evaluate existing model"
+        ),
     )
     parser.add_argument(
         "--model",
@@ -45,7 +49,7 @@ def main() -> None:
 
     trained_model_dir = None
 
-    if args.mode in {"all", "train"}:
+    if args.mode in {"all", "train", "cv", "full"}:
         cfg = make_config(
             model_key=args.model,
             model_name=args.model_name,
@@ -54,8 +58,16 @@ def main() -> None:
         )
         print(f"Training model preset: {cfg.model_key}")
         print(f"Backbone: {cfg.model_name}")
-        trained_model_dir = run_training(cfg)
-        print(f"Trained model saved at: {trained_model_dir}")
+
+        if args.mode == "cv":
+            cv_path = run_cv_only(cfg)
+            print(f"Cross-validation results saved at: {cv_path}")
+        elif args.mode == "full":
+            trained_model_dir = run_full_only(cfg)
+            print(f"Trained model saved at: {trained_model_dir}")
+        else:
+            trained_model_dir = run_training(cfg)
+            print(f"Trained model saved at: {trained_model_dir}")
 
     if args.mode in {"all", "eval"}:
         eval_model_dir = args.model_dir if args.model_dir else trained_model_dir
