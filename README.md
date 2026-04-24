@@ -130,7 +130,12 @@ Update values as new tuning results become available.
 	- weight decay: `0.01`
 	- latest CV reference: accuracy `0.7609`, recall truthful `0.7468`, recall deceptive `0.7739`, overfit folds `0/5`
 - `sbert`:
-	- status: `TBD`
+	- status: `confirmed`
+	- epochs: `2`
+	- learning rate: `5e-5`
+	- batch size: `32`
+	- weight decay: `0.01`
+	- latest CV reference: accuracy `0.7922`, recall truthful `0.7881`, recall deceptive `0.7959`, overfit folds `0/5`
 - `modernbert`:
 	- status: `TBD`
 
