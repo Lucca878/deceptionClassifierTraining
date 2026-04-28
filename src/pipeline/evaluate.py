@@ -2,7 +2,7 @@ import glob
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List
+from typing import List, Optional, Set
 
 import numpy as np
 import pandas as pd
@@ -53,6 +53,15 @@ DATASETS: List[DatasetSpec] = [
         label_col="condition",
     ),
 ]
+
+
+FILTER_PRESETS: dict[str, tuple[float, float]] = {
+    "70-100": (0.70, 1.0),
+    "80-100": (0.80, 1.0),
+    "70-90": (0.70, 0.90),
+    "80-90": (0.80, 0.90),
+}
+FILTER_PRESET_ORDER: list[str] = ["70-100", "80-100", "70-90", "80-90"]
 
 
 def _normalize_label(value):
@@ -126,6 +135,89 @@ def _shared_labeled_path(output_dir: str, dataset_name: str) -> str:
 
 def _per_model_labeled_path(output_dir: str, dataset_name: str, model_tag: str) -> str:
     return os.path.join(output_dir, f"labeled_{dataset_name}_{model_tag}.csv")
+
+
+def _format_threshold_token(value: Optional[float]) -> str:
+    if value is None:
+        return "na"
+    return str(value).replace(".", "p")
+
+
+def _filtered_per_model_labeled_path(
+    output_dir: str,
+    dataset_name: str,
+    model_tag: str,
+    correct_only: bool,
+    prob_min: Optional[float],
+    prob_max: Optional[float],
+) -> str:
+    suffix = _build_filter_suffix(correct_only, prob_min, prob_max)
+    return os.path.join(output_dir, f"labeled_{dataset_name}_{model_tag}_{suffix}.csv")
+
+
+def _build_filter_suffix(
+    correct_only: bool,
+    prob_min: Optional[float],
+    prob_max: Optional[float],
+) -> str:
+    parts = ["filtered"]
+    if correct_only:
+        parts.append("correct")
+    if prob_min is not None or prob_max is not None:
+        parts.append(f"prob_{_format_threshold_token(prob_min)}_{_format_threshold_token(prob_max)}")
+    return "_".join(parts)
+
+
+def _resolve_filter_thresholds(
+    prob_min: Optional[float],
+    prob_max: Optional[float],
+    prob_preset: Optional[str],
+) -> tuple[Optional[float], Optional[float]]:
+    if prob_preset is not None:
+        if prob_preset not in FILTER_PRESETS:
+            valid = ", ".join(sorted(FILTER_PRESETS))
+            raise ValueError(f"Unknown filter preset '{prob_preset}'. Valid presets: {valid}")
+
+        preset_min, preset_max = FILTER_PRESETS[prob_preset]
+        if prob_min is None:
+            prob_min = preset_min
+        if prob_max is None:
+            prob_max = preset_max
+
+    return prob_min, prob_max
+
+
+def _resolve_filter_ranges(
+    prob_min: Optional[float],
+    prob_max: Optional[float],
+    prob_preset: Optional[str],
+    all_ranges: bool,
+) -> list[tuple[Optional[float], Optional[float]]]:
+    if all_ranges:
+        if prob_preset is not None or prob_min is not None or prob_max is not None:
+            raise ValueError(
+                "--filter_all_ranges cannot be combined with --filter_prob_preset, --filter_prob_min, or --filter_prob_max"
+            )
+        return [FILTER_PRESETS[p] for p in FILTER_PRESET_ORDER]
+
+    resolved_min, resolved_max = _resolve_filter_thresholds(prob_min, prob_max, prob_preset)
+    return [(resolved_min, resolved_max)]
+
+
+def _extract_model_tag_from_columns(df: pd.DataFrame) -> Optional[str]:
+    numeric_cols = [c for c in df.columns if c.endswith("_label_numeric")]
+    if len(numeric_cols) != 1:
+        return None
+    return numeric_cols[0][: -len("_label_numeric")]
+
+
+def _extract_dataset_name_from_per_model_filename(path: str, model_tag: str) -> Optional[str]:
+    base = os.path.basename(path)
+    prefix = "labeled_"
+    suffix = f"_{model_tag}.csv"
+    if not base.startswith(prefix) or not base.endswith(suffix):
+        return None
+    return base[len(prefix) : -len(suffix)]
 
 
 def _can_reuse_labeled_df(candidate_df: pd.DataFrame, source_df: pd.DataFrame) -> bool:
@@ -203,15 +295,197 @@ def _write_predictions(
     return labeled_df
 
 
+def _filter_per_model_df(
+    per_model_df: pd.DataFrame,
+    ds: Optional[DatasetSpec],
+    model_tag: str,
+    correct_only: bool,
+    prob_min: Optional[float],
+    prob_max: Optional[float],
+) -> pd.DataFrame:
+    numeric_col = f"{model_tag}_label_numeric"
+    probability_col = f"{model_tag}_probability"
+
+    if numeric_col not in per_model_df.columns:
+        raise ValueError(f"Missing expected prediction column: {numeric_col}")
+
+    mask = pd.Series(True, index=per_model_df.index, dtype=bool)
+
+    if prob_min is not None or prob_max is not None:
+        if probability_col not in per_model_df.columns:
+            raise ValueError(f"Missing expected probability column: {probability_col}")
+
+        probs = pd.to_numeric(per_model_df[probability_col], errors="coerce")
+        prob_mask = probs.notna()
+        if prob_min is not None:
+            prob_mask &= probs >= prob_min
+        if prob_max is not None:
+            prob_mask &= probs <= prob_max
+        mask &= prob_mask
+
+    if correct_only:
+        if ds is None:
+            raise ValueError("correct-only filter requires a known dataset spec")
+
+        if ds.label_col not in per_model_df.columns:
+            raise ValueError(
+                f"Cannot apply correct-only filter for dataset '{ds.name}': missing label column '{ds.label_col}'"
+            )
+
+        true_raw = per_model_df[ds.label_col].apply(_normalize_label)
+        true_project = true_raw.map(lambda v: pd.NA if v is None else 1 - int(v))
+        pred_project = pd.to_numeric(per_model_df[numeric_col], errors="coerce")
+        correct_mask = (
+            true_project.notna()
+            & pred_project.notna()
+            & (pred_project.astype("Int64") == true_project.astype("Int64"))
+        )
+        mask &= correct_mask
+
+    return per_model_df.loc[mask].copy()
+
+
+def _filter_stats_text(filtered_df: pd.DataFrame, model_tag: str) -> str:
+    label_col = f"{model_tag}_label"
+    total = len(filtered_df)
+
+    truthful = 0
+    deceptive = 0
+    if label_col in filtered_df.columns:
+        normalized = filtered_df[label_col].fillna("").astype(str).str.lower().str.strip()
+        truthful = int((normalized == "truthful").sum())
+        deceptive = int((normalized == "deceptive").sum())
+
+    truthful_pct = (100.0 * truthful / total) if total > 0 else 0.0
+    deceptive_pct = (100.0 * deceptive / total) if total > 0 else 0.0
+
+    return (
+        f"rows={total} | truthful={truthful} ({truthful_pct:.1f}%) | "
+        f"deceptive={deceptive} ({deceptive_pct:.1f}%)"
+    )
+
+
+def filter_existing_per_model_csvs(
+    output_dir: str = "results",
+    filter_correct_only: bool = False,
+    filter_prob_min: Optional[float] = None,
+    filter_prob_max: Optional[float] = None,
+    filter_prob_preset: Optional[str] = None,
+    filter_all_ranges: bool = False,
+    filter_datasets: Optional[Set[str]] = None,
+    filter_model_tag: Optional[str] = None,
+) -> list[dict[str, str]]:
+    ranges = _resolve_filter_ranges(
+        filter_prob_min,
+        filter_prob_max,
+        filter_prob_preset,
+        filter_all_ranges,
+    )
+
+    for range_min, range_max in ranges:
+        if range_min is not None and range_max is not None and range_min > range_max:
+            raise ValueError("filter_prob_min cannot be greater than filter_prob_max")
+
+    filter_enabled = (
+        filter_correct_only
+        or any((range_min is not None or range_max is not None) for range_min, range_max in ranges)
+    )
+    if not filter_enabled:
+        raise ValueError(
+            "No filter criteria provided. Use --filter_correct_only, --filter_prob_min/--filter_prob_max, --filter_prob_preset, or --filter_all_ranges."
+        )
+
+    dataset_by_name = {ds.name: ds for ds in DATASETS}
+    written_outputs: list[dict[str, str]] = []
+
+    pattern = os.path.join(output_dir, "labeled_*.csv")
+    for path in sorted(glob.glob(pattern)):
+        base = os.path.basename(path)
+        if "_filtered_" in base:
+            continue
+
+        df = pd.read_csv(path)
+        model_tag = _extract_model_tag_from_columns(df)
+        if not model_tag:
+            continue
+        if filter_model_tag and model_tag != filter_model_tag:
+            continue
+
+        dataset_name = _extract_dataset_name_from_per_model_filename(path, model_tag)
+        if not dataset_name:
+            continue
+        if filter_datasets is not None and dataset_name not in filter_datasets:
+            continue
+
+        ds_spec = dataset_by_name.get(dataset_name)
+        for range_min, range_max in ranges:
+            filtered_df = _filter_per_model_df(
+                per_model_df=df,
+                ds=ds_spec,
+                model_tag=model_tag,
+                correct_only=filter_correct_only,
+                prob_min=range_min,
+                prob_max=range_max,
+            )
+            out_path = _filtered_per_model_labeled_path(
+                output_dir=output_dir,
+                dataset_name=dataset_name,
+                model_tag=model_tag,
+                correct_only=filter_correct_only,
+                prob_min=range_min,
+                prob_max=range_max,
+            )
+            filtered_df.to_csv(out_path, index=False)
+            written_outputs.append(
+                {
+                    "path": out_path,
+                    "dataset": dataset_name,
+                    "model": model_tag,
+                    "filter": _build_filter_suffix(filter_correct_only, range_min, range_max),
+                    "stats": _filter_stats_text(filtered_df, model_tag),
+                }
+            )
+
+    return written_outputs
+
+
 def evaluate_model_on_datasets(
     model_dir: str,
     output_dir: str = "results",
     labeled_output: str = "combined",
+    filter_correct_only: bool = False,
+    filter_prob_min: Optional[float] = None,
+    filter_prob_max: Optional[float] = None,
+    filter_prob_preset: Optional[str] = None,
+    filter_all_ranges: bool = False,
+    filter_print_stats: bool = False,
+    filter_datasets: Optional[Set[str]] = None,
 ) -> str:
     os.makedirs(output_dir, exist_ok=True)
 
     if labeled_output not in {"combined", "per-model", "both"}:
         raise ValueError("labeled_output must be one of: combined, per-model, both")
+
+    ranges = _resolve_filter_ranges(
+        filter_prob_min,
+        filter_prob_max,
+        filter_prob_preset,
+        filter_all_ranges,
+    )
+
+    for range_min, range_max in ranges:
+        if range_min is not None and range_max is not None and range_min > range_max:
+            raise ValueError("filter_prob_min cannot be greater than filter_prob_max")
+
+    filter_enabled = (
+        filter_correct_only
+        or any((range_min is not None or range_max is not None) for range_min, range_max in ranges)
+    )
+
+    if filter_enabled and labeled_output == "combined":
+        raise ValueError(
+            "Filtering reduced CSVs requires per-model predictions. Use --labeled_output per-model or --labeled_output both."
+        )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
@@ -302,6 +576,37 @@ def evaluate_model_on_datasets(
             )
             labeled_out = _per_model_labeled_path(output_dir, ds.name, model_tag)
             per_model_df.to_csv(labeled_out, index=False)
+
+            should_filter_dataset = (
+                filter_enabled
+                and (filter_datasets is None or ds.name in filter_datasets)
+            )
+
+            if should_filter_dataset:
+                for range_min, range_max in ranges:
+                    filtered_df = _filter_per_model_df(
+                        per_model_df=per_model_df,
+                        ds=ds,
+                        model_tag=model_tag,
+                        correct_only=filter_correct_only,
+                        prob_min=range_min,
+                        prob_max=range_max,
+                    )
+                    filtered_out = _filtered_per_model_labeled_path(
+                        output_dir=output_dir,
+                        dataset_name=ds.name,
+                        model_tag=model_tag,
+                        correct_only=filter_correct_only,
+                        prob_min=range_min,
+                        prob_max=range_max,
+                    )
+                    filtered_df.to_csv(filtered_out, index=False)
+                    if filter_print_stats:
+                        stats = _filter_stats_text(filtered_df, model_tag)
+                        print(
+                            f"[filter] dataset={ds.name} model={model_tag} "
+                            f"criteria={_build_filter_suffix(filter_correct_only, range_min, range_max)} | {stats}"
+                        )
 
     summary_df = pd.DataFrame(summary_rows)
     out_path = os.path.join(output_dir, "summary_all_datasets.csv")

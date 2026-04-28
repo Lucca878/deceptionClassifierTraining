@@ -87,6 +87,25 @@ python src/pipeline/run_pipeline.py --mode full --model distilbert
 
  # both: write both combined and per-model labeled CSV outputs
  python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output both
+
+ # Optional: write reduced per-model CSVs (filter by confidence and correctness)
+ # This creates extra files like labeled_<dataset>_<model>_filtered_*.csv
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output per-model --filter_correct_only --filter_prob_min 0.70 --filter_prob_max 1.0
+
+ # Optional: apply filtering only to specific datasets
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output per-model --filter_correct_only --filter_prob_min 0.80 --filter_prob_max 1.0 --filter_datasets hippocorpus_test
+
+ # Filter only (no model inference): reduce already-generated per-model CSV files in results/
+ python src/pipeline/run_pipeline.py --mode filter --results_dir results --filter_correct_only --filter_prob_preset 80-100
+
+ # Filter only for a specific model tag and dataset
+ python src/pipeline/run_pipeline.py --mode filter --results_dir results --filter_correct_only --filter_prob_preset 70-90 --filter_model_tag distilBERT_finetuned --filter_datasets hippocorpus_test
+
+ # Filter only shortcut: run all probability ranges in one command and print stats
+ python src/pipeline/run_pipeline.py --mode filter --results_dir results --filter_correct_only --filter_all_ranges --filter_print_stats
+
+ # Same all-ranges shortcut during evaluation (writes per-model + filtered outputs + stats)
+ python src/pipeline/run_pipeline.py --mode eval --model_dir models/distilBERT_finetuned --labeled_output per-model --filter_correct_only --filter_all_ranges --filter_print_stats
 ```
 
 ## Colab GPU Training
@@ -172,6 +191,7 @@ Evaluation artifacts:
 - `results/summary_all_datasets.csv`
 - `results/labeled_<dataset>.csv` (default, combined output)
 - `results/labeled_<dataset>_<model>.csv` (optional, when `--labeled_output per-model` or `--labeled_output both` is used)
+- `results/labeled_<dataset>_<model>_filtered_*.csv` (optional, when filter flags are used with per-model output)
 
 `summary_all_datasets.csv` is append-only: each new evaluation run appends rows instead of overwriting prior results.
 
@@ -185,6 +205,21 @@ Combined labeled dataset CSVs contain the original dataset columns plus one set 
 `--labeled_output per-model` writes standalone labeled files for the current evaluated model only.
 
 `--labeled_output both` writes both formats in the same evaluation run.
+
+Reduced per-model CSV options:
+- `--filter_correct_only`: keep only rows where prediction matches mapped ground truth label
+- `--filter_prob_min`: keep rows with `<model>_probability >= min`
+- `--filter_prob_max`: keep rows with `<model>_probability <= max`
+- `--filter_prob_preset`: threshold shortcut (`70-100`, `80-100`, `70-90`, `80-90`)
+- `--filter_all_ranges`: run all built-in threshold ranges in one command (`70-100`, `80-100`, `70-90`, `80-90`)
+- `--filter_print_stats`: print row count and class proportions in terminal for each filtered output
+- `--filter_datasets`: comma-separated dataset names to filter (e.g., `hippocorpus_test,decop`)
+- `--filter_model_tag`: when using `--mode filter`, only process per-model CSVs for that model tag
+
+Note: filtering reduced CSVs requires per-model predictions, so use `--labeled_output per-model` or `--labeled_output both`.
+
+Filter-only mode:
+- `--mode filter` scans `results/` (or `--results_dir`) for existing per-model labeled CSVs and writes reduced `..._filtered_*.csv` files without running evaluation again.
 
 ## Reproducibility Note
 
