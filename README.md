@@ -149,12 +149,12 @@ Update values as new tuning results become available.
 	- weight decay: `0.01`
 	- latest CV reference: accuracy `0.7922`, recall truthful `0.7881`, recall deceptive `0.7959`, overfit folds `0/5`
 - `modernbert`:
-	- status: `last Colab run`
+	- status: `confirmed`
 	- epochs: `2`
 	- learning rate: `4e-5`
 	- batch size: `32`
-	- weight decay: `0.01`c
-	- latest CV reference: accuracy `0.7651`, mean eval accuracy `0.7470`, mean eval loss `0.5151`, mean train loss `0.4857`, overfit folds `0/5`
+	- weight decay: `0.01`
+	- latest CV reference: accuracy `0.7686`, recall truthful `0.7404`, recall deceptive `0.7947`, mean eval accuracy `0.7509`, mean eval loss `0.5158`, mean train loss `0.4786`, overfit folds `0/5`
 
 Important label semantics:
 - Training follows notebook semantics internally: `truthful -> 0`, `deceptive -> 1`.
