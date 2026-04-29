@@ -3,6 +3,7 @@ transformers
 datasets
 evaluate
 scikit-learn
+scipy
 pandas
 numpy
 accelerate

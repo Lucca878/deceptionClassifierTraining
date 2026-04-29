@@ -31,6 +31,8 @@ If conda shell hooks are not active yet:
 source ~/.zshrc
 ```
 
+**Note:** All dependencies are pinned in both `environment.yml` (conda) and `requirements.txt` (pip). Use `environment.yml` for the recommended setup with conda, or `requirements.txt` if installing with pip.
+
 ## Single End-to-End Command
 
 ```bash
@@ -42,6 +44,11 @@ Supported model presets:
 - `bert`
 - `sbert`
 - `modernbert`
+
+**Default behavior:**
+- Training artifacts are saved to `models/` (use `--output_root` to override)
+- Evaluation results are saved to `results/` (use `--results_dir` to override)
+- The pipeline is reproducible with seed `42` (use `--seed` to change)
 
 Example runs:
 
@@ -118,18 +125,27 @@ python src/pipeline/run_pipeline.py --mode full --model distilbert
 
 You can run training in Colab with GPU by using the same command interface.
 
-Typical Colab flow (same as before):
-1. Open `train_colab.ipynb`.
-2. Runtime -> Change runtime type -> GPU.
-3. Run the setup/GPU cells.
-4. Set hyperparameters and model.
-5. Run CV.
-6. Run full training and package the model.
+The `train_colab.ipynb` notebook uses the same pipeline and defaults as the local setup:
+- Training artifacts saved to `models/` (same as `--output_root models`)
+- Evaluation results saved to `results/` (same as `--results_dir results`)
+- Full reproducibility with `seed 42`
 
-New Colab options:
-1. Save one CV-selected model during CV (`SAVE_BEST_CV_MODEL = True`).
-2. Choose how that single CV model is selected across folds (`CV_SELECTION_METRIC`).
-3. Choose artifact source in packaging stage (`EXPORT_MODEL_SOURCE = "full_train"` or `"cv_best"`).
+Typical Colab flow:
+1. Open `train_colab.ipynb`.
+2. Runtime → Change runtime type → GPU (e.g., A100).
+3. Run the setup/GPU cells (clone, install dependencies, verify GPU).
+4. Configure hyperparameters in section 2.5 (optional; leave `None` for defaults).
+5. Select model in section 2.6.
+6. Run cross-validation in section 3.
+7. Inspect CV results in section 4.
+8. Run full training and package the model in section 5.
+9. (Optional) Copy model to Google Drive in section 6.
+10. (Optional) Run evaluation in section 7 and copy results to Drive.
+
+Key Colab options:
+1. **Save best CV model:** Set `SAVE_BEST_CV_MODEL = True` in section 2.5 to save the best model selected across CV folds.
+2. **CV selection metric:** Configure `CV_SELECTION_METRIC` to choose how fold models are compared (default: `accuracy`).
+3. **Export source:** Set `EXPORT_MODEL_SOURCE` in section 5 to package either the full-trained model or the best CV model.
 
 `CV_SELECTION_METRIC` choices:
 - `accuracy`
@@ -226,15 +242,15 @@ Important label semantics:
 ## Outputs
 
 Training artifacts:
-- `models/<model>_<timestamp>/cv_results.csv`
-- `models/<model>_<timestamp>/config.json`
-- `models/<model>_<timestamp>/model/`
+- `models/<model>_<timestamp>/cv_results.csv` — Cross-validation results
+- `models/<model>_<timestamp>/config.json` — Training configuration
+- `models/<model>_<timestamp>/model/` — Final trained model
 
 Evaluation artifacts:
-- `results/summary_all_datasets.csv`
-- `results/labeled_<dataset>.csv` (default, combined output)
-- `results/labeled_<dataset>_<model>.csv` (optional, when `--labeled_output per-model` or `--labeled_output both` is used)
-- `results/labeled_<dataset>_<model>_filtered_*.csv` (optional, when filter flags are used with per-model output)
+- `results/summary_all_datasets.csv` — Summary metrics across all datasets
+- `results/labeled_<dataset>.csv` — Default combined labeled output
+- `results/labeled_<dataset>_<model>.csv` — Per-model labeled output (optional)
+- `results/labeled_<dataset>_<model>_filtered_*.csv` — Filtered per-model output (optional)
 
 `summary_all_datasets.csv` is append-only: each new evaluation run appends rows instead of overwriting prior results.
 
