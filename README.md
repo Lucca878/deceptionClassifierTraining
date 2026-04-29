@@ -68,6 +68,12 @@ python src/pipeline/run_pipeline.py --mode train --model distilbert
 # CV only (tuning stage)
 python src/pipeline/run_pipeline.py --mode cv --model distilbert
 
+# CV only + save a single CV-selected model
+python src/pipeline/run_pipeline.py --mode cv --model distilbert --save_best_cv_model
+
+# CV only + save a single CV-selected model using loss as cross-fold selector
+python src/pipeline/run_pipeline.py --mode cv --model distilbert --save_best_cv_model --cv_selection_metric eval_loss
+
 # Full-data training only (after choosing settings from CV)
 python src/pipeline/run_pipeline.py --mode full --model distilbert
 
@@ -112,21 +118,58 @@ python src/pipeline/run_pipeline.py --mode full --model distilbert
 
 You can run training in Colab with GPU by using the same command interface.
 
-Typical Colab flow:
-1. Upload or clone this repo in Colab.
+Typical Colab flow (same as before):
+1. Open `train_colab.ipynb`.
 2. Runtime -> Change runtime type -> GPU.
-3. Install environment dependencies (pip in Colab).
-4. Run CV first, then full training.
+3. Run the setup/GPU cells.
+4. Set hyperparameters and model.
+5. Run CV.
+6. Run full training and package the model.
+
+New Colab options:
+1. Save one CV-selected model during CV (`SAVE_BEST_CV_MODEL = True`).
+2. Choose how that single CV model is selected across folds (`CV_SELECTION_METRIC`).
+3. Choose artifact source in packaging stage (`EXPORT_MODEL_SOURCE = "full_train"` or `"cv_best"`).
+
+`CV_SELECTION_METRIC` choices:
+- `accuracy`
+- `eval_accuracy`
+- `eval_loss`
+- `validation_loss`
+- `loss`
+
+Selection direction:
+- Accuracy metrics are maximized.
+- Loss metrics are minimized.
+
+Important behavior note:
+- The per-fold Trainer still chooses the best checkpoint inside each fold.
+- The custom layer only chooses which fold-model to keep as `cv_best_model`.
 
 ```bash
 # CV (inspect cv_results.csv)
 python src/pipeline/run_pipeline.py --mode cv --model distilbert
 
+# CV + save one model selected across folds (default selector: accuracy)
+python src/pipeline/run_pipeline.py --mode cv --model distilbert --save_best_cv_model
+
+# CV + save one model selected across folds by validation loss
+python src/pipeline/run_pipeline.py --mode cv --model distilbert --save_best_cv_model --cv_selection_metric eval_loss
+
 # Full training after you are satisfied with CV
 python src/pipeline/run_pipeline.py --mode full --model distilbert
 ```
 
-The trained model is saved under `models/<model>_<timestamp>/model/`.
+If `--save_best_cv_model` is enabled, an additional artifact is written at:
+- `models/<model>_<timestamp>/cv_best_model/`
+
+The full-data trained model is saved under:
+- `models/<model>_<timestamp>/model/`
+
+In the Colab notebook (`train_colab.ipynb`):
+- Cell 8 configures `SAVE_BEST_CV_MODEL`, `CV_SELECTION_METRIC`, and `EXPORT_MODEL_SOURCE`.
+- Cell 12 runs CV with the selected cross-fold metric.
+- Cell 18 packages either `full_train` or `cv_best` based on `EXPORT_MODEL_SOURCE`.
 
 ## Training Settings (DistilBERT Notebook Equivalent)
 

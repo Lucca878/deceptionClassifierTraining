@@ -2,10 +2,10 @@ import argparse
 
 try:
     from src.pipeline.evaluate import evaluate_model_on_datasets, filter_existing_per_model_csvs
-    from src.pipeline.train import make_config, run_cv_only, run_full_only, run_training
+    from src.pipeline.train import make_config, run_cv_only, run_cv_only_with_best_model, run_full_only, run_training
 except ModuleNotFoundError:
     from evaluate import evaluate_model_on_datasets, filter_existing_per_model_csvs
-    from train import make_config, run_cv_only, run_full_only, run_training
+    from train import make_config, run_cv_only, run_cv_only_with_best_model, run_full_only, run_training
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +103,23 @@ def parse_args() -> argparse.Namespace:
         help="Optional model tag filter for --mode filter (e.g., distilBERT_finetuned)",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--save_best_cv_model",
+        action="store_true",
+        help=(
+            "When running cross-validation, also save the best fold model selected by the Trainer "
+            "to a cv_best_model directory inside the run output"
+        ),
+    )
+    parser.add_argument(
+        "--cv_selection_metric",
+        choices=["accuracy", "eval_accuracy", "eval_loss", "validation_loss", "loss"],
+        default="accuracy",
+        help=(
+            "Metric used by the custom cross-fold selection layer when saving a single CV model. "
+            "Use accuracy/eval_accuracy to maximize performance or eval_loss/validation_loss/loss to minimize loss."
+        ),
+    )
     # Hyperparameters
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate")
@@ -126,18 +143,23 @@ def main() -> None:
             lr=args.lr,
             batch_size=args.batch_size,
             weight_decay=args.weight_decay,
+            cv_selection_metric=args.cv_selection_metric,
         )
         print(f"Training model preset: {cfg.model_key}")
         print(f"Backbone: {cfg.model_name}")
 
         if args.mode == "cv":
-            cv_path = run_cv_only(cfg)
+            if args.save_best_cv_model:
+                cv_path, best_model_path = run_cv_only_with_best_model(cfg)
+                print(f"Best CV-selected model saved at: {best_model_path}")
+            else:
+                cv_path = run_cv_only(cfg)
             print(f"Cross-validation results saved at: {cv_path}")
         elif args.mode == "full":
             trained_model_dir = run_full_only(cfg)
             print(f"Trained model saved at: {trained_model_dir}")
         else:
-            trained_model_dir = run_training(cfg)
+            trained_model_dir = run_training(cfg, save_best_cv_model=args.save_best_cv_model)
             print(f"Trained model saved at: {trained_model_dir}")
 
     if args.mode in {"all", "eval"}:

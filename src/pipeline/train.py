@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Dict
+import shutil
 
 import json
 import numpy as np
@@ -52,6 +53,7 @@ class TrainConfig:
     lr: float = 5e-5
     batch_size: int = 32
     weight_decay: float = 0.01
+    cv_selection_metric: str = "accuracy"
 
 
 def make_config(
@@ -63,6 +65,7 @@ def make_config(
     lr: float | None = None,
     batch_size: int | None = None,
     weight_decay: float | None = None,
+    cv_selection_metric: str = "accuracy",
 ) -> TrainConfig:
     if model_key not in MODEL_PRESETS:
         raise ValueError(f"Unsupported model '{model_key}'. Choices: {sorted(MODEL_PRESETS)}")
@@ -73,6 +76,7 @@ def make_config(
         model_name=chosen_model_name,
         output_dir=output_root,
         seed=seed,
+        cv_selection_metric=cv_selection_metric,
     )
     
     # Override hyperparameters if provided
@@ -187,16 +191,84 @@ def make_training_args(output_dir: str, cfg: TrainConfig, use_eval: bool = True)
     )
 
 
+def save_cv_selected_model(
+    trainer: Trainer,
+    tokenizer,
+    run_dir: str,
+    split_name: str,
+    selection_metric: str,
+    selection_value: float,
+    eval_metrics: dict[str, float],
+) -> str:
+    """Persist the best fold model currently loaded in the trainer."""
+    save_dir = os.path.join(run_dir, "cv_best_model")
+    if os.path.isdir(save_dir):
+        shutil.rmtree(save_dir)
+
+    trainer.model.save_pretrained(save_dir)
+    tokenizer.save_pretrained(save_dir)
+
+    with open(os.path.join(save_dir, "selection.json"), "w") as f:
+        json.dump(
+            {
+                "selected_from_split": split_name,
+                "selection_metric": selection_metric,
+                "selection_value": selection_value,
+                "eval_metrics": eval_metrics,
+            },
+            f,
+            indent=2,
+        )
+
+    print(
+        f"Saved current best CV model from {split_name} "
+        f"({selection_metric}={selection_value:.4f}) to: {save_dir}"
+    )
+    return save_dir
+
+
+def get_cv_selection_value(eval_metrics: dict[str, float], selection_metric: str) -> tuple[float, bool, str]:
+    """Return the value used to rank folds, whether larger is better, and the normalized metric name."""
+    metric_aliases = {
+        "accuracy": "eval_accuracy",
+        "eval_accuracy": "eval_accuracy",
+        "loss": "eval_loss",
+        "eval_loss": "eval_loss",
+        "validation_loss": "eval_loss",
+    }
+
+    if selection_metric not in metric_aliases:
+        raise ValueError(
+            "Unsupported cv_selection_metric "
+            f"'{selection_metric}'. Choices: {sorted(metric_aliases)}"
+        )
+
+    metric_key = metric_aliases[selection_metric]
+    if metric_key not in eval_metrics:
+        raise ValueError(
+            f"Metric '{metric_key}' not found in evaluation metrics: {sorted(eval_metrics)}"
+        )
+
+    larger_is_better = metric_key != "eval_loss"
+    return float(eval_metrics[metric_key]), larger_is_better, metric_key
+
+
 # ---------------------------------------------------------------------------
 # Cross-validation
 # ---------------------------------------------------------------------------
 
-def run_cv(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.DataFrame:
+def run_cv(
+    df: pd.DataFrame,
+    cfg: TrainConfig,
+    run_dir: str,
+    save_best_model: bool = False,
+) -> pd.DataFrame:
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     train_splits, test_splits = create_splits(df, cfg)
     all_results = []
+    best_selection_value: float | None = None
 
     for split_name in train_splits:
         print(f"\n--- {split_name} ---")
@@ -218,6 +290,12 @@ def run_cv(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.DataFrame:
         )
         trainer.train()
 
+        eval_metrics = {
+            key: float(value)
+            for key, value in trainer.evaluate(tok_test).items()
+            if isinstance(value, (int, float))
+        }
+
         # Collect predictions
         preds = np.argmax(trainer.predict(tok_test).predictions, axis=1)
         labels = np.array(test_splits[split_name]["labels_binary"])
@@ -229,6 +307,34 @@ def run_cv(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> pd.DataFrame:
         })
         fold_df["Correct"] = fold_df["Prediction"] == fold_df["Label"]
         all_results.append(fold_df)
+
+        split_accuracy = float(fold_df["Correct"].mean())
+        eval_metrics["eval_accuracy_manual"] = split_accuracy
+        selection_value, larger_is_better, metric_key = get_cv_selection_value(
+            eval_metrics,
+            cfg.cv_selection_metric,
+        )
+
+        print(
+            f"{split_name} metrics: accuracy={split_accuracy:.4f}, "
+            f"eval_loss={eval_metrics.get('eval_loss', float('nan')):.4f}, "
+            f"selector={metric_key}={selection_value:.4f}"
+        )
+
+        is_better = best_selection_value is None or (
+            selection_value > best_selection_value if larger_is_better else selection_value < best_selection_value
+        )
+        if save_best_model and is_better:
+            best_selection_value = selection_value
+            save_cv_selected_model(
+                trainer,
+                tokenizer,
+                run_dir,
+                split_name,
+                metric_key,
+                selection_value,
+                eval_metrics,
+            )
 
         del model, trainer
         torch.cuda.empty_cache()
@@ -267,7 +373,7 @@ def train_and_save(df: pd.DataFrame, cfg: TrainConfig, run_dir: str) -> str:
 # Entrypoint
 # ---------------------------------------------------------------------------
 
-def run_training(cfg: TrainConfig) -> str:
+def run_training(cfg: TrainConfig, save_best_cv_model: bool = False) -> str:
     set_seed(cfg.seed)
 
     run_dir = os.path.join(cfg.output_dir, f"{cfg.model_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -277,7 +383,7 @@ def run_training(cfg: TrainConfig) -> str:
     print(f"Loaded {len(df)} rows from {cfg.data_path}")
 
     # Cross-validation
-    cv_results = run_cv(df, cfg, run_dir)
+    cv_results = run_cv(df, cfg, run_dir, save_best_model=save_best_cv_model)
     cv_results.to_csv(os.path.join(run_dir, "cv_results.csv"), sep=";", index=False)
 
     acc = cv_results["Correct"].mean()
@@ -315,6 +421,32 @@ def run_cv_only(cfg: TrainConfig) -> str:
 
     print(f"CV results saved at: {cv_path}")
     return cv_path
+
+
+def run_cv_only_with_best_model(cfg: TrainConfig) -> tuple[str, str]:
+    """Run cross-validation, save CV artifacts, and persist the best fold model."""
+    set_seed(cfg.seed)
+
+    run_dir = os.path.join(cfg.output_dir, f"{cfg.model_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    df = load_data(cfg)
+    print(f"Loaded {len(df)} rows from {cfg.data_path}")
+
+    cv_results = run_cv(df, cfg, run_dir, save_best_model=True)
+    cv_path = os.path.join(run_dir, "cv_results.csv")
+    cv_results.to_csv(cv_path, sep=";", index=False)
+
+    acc = cv_results["Correct"].mean()
+    print(f"\nCV accuracy: {acc:.4f}")
+
+    with open(os.path.join(run_dir, "config.json"), "w") as f:
+        json.dump(asdict(cfg), f, indent=2)
+
+    best_model_path = os.path.join(run_dir, "cv_best_model")
+    print(f"CV results saved at: {cv_path}")
+    print(f"Best CV-selected model saved at: {best_model_path}")
+    return cv_path, best_model_path
 
 
 def run_full_only(cfg: TrainConfig) -> str:
