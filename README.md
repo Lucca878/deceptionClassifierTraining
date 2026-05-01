@@ -9,6 +9,8 @@ The workflow is script-first and reproducible:
 
 By default, evaluation writes one combined labeled CSV per dataset and appends the current model's columns into that file.
 
+Evaluation summary rows now include ROC AUC (`auc`) in addition to accuracy/F1/precision/recall and confusion-matrix counts.
+
 ## Fresh Clone Flow
 
 If you are new to this repo:
@@ -253,6 +255,11 @@ Evaluation artifacts:
 - `results/labeled_<dataset>_<model>_filtered_*.csv` — Filtered per-model output (optional)
 
 `summary_all_datasets.csv` is append-only: each new evaluation run appends rows instead of overwriting prior results.
+
+AUC behavior:
+- During evaluation (`--mode eval` and `--mode all`), ROC AUC is computed directly from model probabilities and written to `results/summary_all_datasets.csv` as `auc`.
+- After evaluation, missing `auc` values in existing summary rows can be backfilled from combined labeled files (`results/labeled_<dataset>.csv`) when `<model>_label_numeric` and `<model>_probability` columns are present.
+- This means you do not need to rerun model training to recover AUC for historical rows when those prediction columns already exist.
 
 Combined labeled dataset CSVs contain the original dataset columns plus one set of prediction columns per evaluated model:
 - `<model>_label_numeric`: numeric prediction (`deceptive=0`, `truthful=1`)

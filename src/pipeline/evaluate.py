@@ -7,7 +7,14 @@ from typing import List, Optional, Set
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
@@ -365,6 +372,87 @@ def _filter_stats_text(filtered_df: pd.DataFrame, model_tag: str) -> str:
     )
 
 
+def _compute_auc_from_saved_predictions(
+    output_dir: str,
+    dataset_name: str,
+    model_tag: str,
+) -> Optional[float]:
+    ds = next((spec for spec in DATASETS if spec.name == dataset_name), None)
+    if ds is None:
+        return None
+
+    shared_path = _shared_labeled_path(output_dir, dataset_name)
+    if not os.path.exists(shared_path):
+        return None
+
+    df = pd.read_csv(shared_path)
+    numeric_col = f"{model_tag}_label_numeric"
+    probability_col = f"{model_tag}_probability"
+
+    if ds.label_col not in df.columns or numeric_col not in df.columns or probability_col not in df.columns:
+        return None
+
+    true_raw = df[ds.label_col].apply(_normalize_label)
+    true_project = true_raw.map(lambda v: pd.NA if v is None else 1 - int(v))
+    pred_project = pd.to_numeric(df[numeric_col], errors="coerce")
+    pred_conf = pd.to_numeric(df[probability_col], errors="coerce")
+
+    valid = (
+        true_project.notna()
+        & pred_project.notna()
+        & pred_conf.notna()
+        & pred_project.isin([0, 1])
+    )
+    if int(valid.sum()) == 0:
+        return None
+
+    y_true = true_project.loc[valid].astype(int)
+    if y_true.nunique() < 2:
+        return None
+
+    pred_vals = pred_project.loc[valid].astype(int)
+    conf_vals = pred_conf.loc[valid].astype(float)
+    y_score = np.where(pred_vals.to_numpy() == 1, conf_vals.to_numpy(), 1.0 - conf_vals.to_numpy())
+
+    return float(roc_auc_score(y_true.to_numpy(), y_score))
+
+
+def _backfill_auc_in_summary(summary_df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+    if summary_df.empty:
+        if "auc" not in summary_df.columns:
+            summary_df["auc"] = pd.Series(dtype="Float64")
+        return summary_df
+
+    if "auc" not in summary_df.columns:
+        summary_df["auc"] = pd.NA
+
+    cache: dict[tuple[str, str], Optional[float]] = {}
+
+    for idx, row in summary_df.iterrows():
+        existing_auc = row.get("auc")
+        if pd.notna(existing_auc):
+            continue
+
+        dataset_name = row.get("dataset")
+        model_tag = row.get("model")
+        if not isinstance(dataset_name, str) or not isinstance(model_tag, str):
+            continue
+
+        key = (dataset_name, model_tag)
+        if key not in cache:
+            cache[key] = _compute_auc_from_saved_predictions(
+                output_dir=output_dir,
+                dataset_name=dataset_name,
+                model_tag=model_tag,
+            )
+
+        auc_value = cache[key]
+        if auc_value is not None:
+            summary_df.at[idx, "auc"] = round(auc_value, 4)
+
+    return summary_df
+
+
 def filter_existing_per_model_csvs(
     output_dir: str = "results",
     filter_correct_only: bool = False,
@@ -526,10 +614,13 @@ def evaluate_model_on_datasets(
             for prob_vec, proj_lbl in zip(raw_probs, pred_label_num)
         ]
 
+        y_score_positive = [float(prob_vec[0]) for prob_vec in raw_probs]
+
         acc = accuracy_score(y_true, y_pred)
         f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
         prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
         rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        auc = roc_auc_score(y_true, y_score_positive)
 
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
@@ -543,6 +634,7 @@ def evaluate_model_on_datasets(
                 "f1_macro": round(f1, 4),
                 "precision": round(prec, 4),
                 "recall": round(rec, 4),
+                "auc": round(float(auc), 4),
                 "tn": int(tn),
                 "fp": int(fp),
                 "fn": int(fn),
@@ -613,6 +705,8 @@ def evaluate_model_on_datasets(
     if os.path.exists(out_path):
         existing = pd.read_csv(out_path)
         summary_df = pd.concat([existing, summary_df], ignore_index=True)
+
+    summary_df = _backfill_auc_in_summary(summary_df, output_dir)
 
     summary_df.to_csv(out_path, index=False)
     return out_path
